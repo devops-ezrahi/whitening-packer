@@ -76,6 +76,17 @@ def test_team_prefix_in_output_zip():
         assert len(produced) == 1, list(out_dir.iterdir())
 
 
+def test_detect_team_from_ci_config():
+    with tempfile.TemporaryDirectory() as tmp:
+        tmp_path = Path(tmp)
+        assert pack.detect_team(tmp_path) == ""
+
+        workflows = tmp_path / ".github" / "workflows"
+        workflows.mkdir(parents=True)
+        (workflows / "ci.yml").write_text("name: CI\n\nenv:\n  TEAM: dvps\n")
+        assert pack.detect_team(tmp_path) == "dvps"
+
+
 def test_detect_version_package_json():
     with tempfile.TemporaryDirectory() as tmp:
         tmp_path = Path(tmp)

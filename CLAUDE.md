@@ -16,9 +16,12 @@ no `origin` remote (local-only repos).
 python pack.py <project-path> [--team <name>] [--no-deps] [--all-deps] [--no-images] [-o <output>]
 ```
 
-`--team` prefixes the output filename (whitespace in the name becomes hyphens). The
-`whitening-packer` skill asks the user for this interactively before running the script —
-see `~/.claude/skills/whitening-packer/SKILL.md`.
+`--team` prefixes the output filename (whitespace in the name becomes hyphens). When the
+flag is omitted, `detect_team` looks for a `TEAM:` key in the project's CI config
+(`.github/workflows/*.y*ml`, then `.gitea/workflows/*.y*ml`, first match wins) — so CI and
+local packs produce the same filename with nobody typing the team. Regex, not a YAML parse:
+one scalar isn't worth a PyYAML dependency. The `whitening-packer` skill only asks the user
+interactively when detection comes up empty — see `~/.claude/skills/whitening-packer/SKILL.md`.
 
 Requires the target path to contain `.git` (hard requirement, not optional).
 

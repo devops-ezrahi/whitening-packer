@@ -96,6 +96,24 @@ def create_pack_tag(project_path: Path, version: str) -> str:
     return tag
 
 
+TEAM_RE = re.compile(r"^\s*TEAM:\s*['\"]?([A-Za-z0-9._-]+)", re.MULTILINE)
+
+
+def detect_team(project_path: Path) -> str:
+    """Team name declared in a CI config, or '' if none.
+
+    Lets CI and local packs produce the same filename without anyone passing
+    --team. ponytail: a regex over the workflow files, not a YAML parse — no
+    new dependency for reading one scalar.
+    """
+    for workflows in (".github/workflows", ".gitea/workflows"):
+        for cfg in sorted((project_path / workflows).glob("*.y*ml")):
+            match = TEAM_RE.search(cfg.read_text(errors="ignore"))
+            if match:
+                return match.group(1)
+    return ""
+
+
 def detect_project_name(project_path: Path) -> str:
     result = subprocess.run(
         ["git", "-C", str(project_path), "remote", "get-url", "origin"],
@@ -145,7 +163,9 @@ def main() -> None:
                         help="pack all dependencies (skip the delta-since-last-pack-tag optimization)")
     parser.add_argument("--no-images", action="store_true", help="skip the Docker base images folder")
     parser.add_argument("-o", "--output", help="output zip path or directory (default: current directory)")
-    parser.add_argument("--team", help="team name to prefix the output zip filename with")
+    parser.add_argument("--team",
+                        help="team name to prefix the output zip filename with "
+                             "(default: TEAM from the project's CI config, if any)")
     args = parser.parse_args()
 
     project_path = Path(args.project_path).resolve()
@@ -158,8 +178,9 @@ def main() -> None:
 
     project_name = detect_project_name(project_path)
     version = detect_version(project_path)
-    if args.team:
-        team = re.sub(r"\s+", "-", args.team.strip())
+    team_name = args.team or detect_team(project_path)
+    if team_name:
+        team = re.sub(r"\s+", "-", team_name.strip())
         zip_name = f"{team}-{project_name}-{version}.zip"
     else:
         zip_name = f"{project_name}-{version}.zip"
