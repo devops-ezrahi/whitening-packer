@@ -25,6 +25,23 @@ interactively when detection comes up empty — see `~/.claude/skills/whitening-
 
 Requires the target path to contain `.git` (hard requirement, not optional).
 
+## config.json (zip root)
+
+Every zip carries a `config.json` next to `source/`. It's what the consumer reads — the
+devops-portal whitening module parses it instead of the filename:
+
+```json
+{ "project": "devops-portal", "version": "1.0.4", "team": "dvps",
+  "repo": "devops-portal", "exclude": [".github/**"] }
+```
+
+`project`/`version`/`team` are detected as described above. `repo` (the repo name on the
+closed-network git, which may differ from the project name) and `exclude` (glob patterns
+the unpacker keeps out of its pull request — git pathspec syntax, so `*` crosses `/` like
+in `.gitignore`) can only come from the project: an optional `whitening.json` at the
+project root supplies them. No file → `repo` defaults to the project name, `exclude` to
+`[]`.
+
 ## Pack tags + delta dependencies
 
 Every successful pack creates a lightweight git tag on HEAD:

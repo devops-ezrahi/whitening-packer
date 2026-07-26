@@ -130,6 +130,30 @@ def detect_project_name(project_path: Path) -> str:
     return project_path.name
 
 
+def load_pack_config(project_path: Path, project: str, version: str, team: str) -> dict:
+    """The config.json written at the zip root — what the unpacker reads.
+
+    Project name/version/team are detected; the closed-network repo name and
+    the PR exclude globs can only come from the project, so an optional
+    `whitening.json` at its root supplies them.
+    """
+    overrides = {}
+    settings = project_path / "whitening.json"
+    if settings.exists():
+        try:
+            overrides = json.loads(settings.read_text())
+        except (json.JSONDecodeError, OSError) as err:
+            print(f"warning: ignoring unreadable whitening.json: {err}", file=sys.stderr)
+
+    return {
+        "project": project,
+        "version": version,
+        "team": team,
+        "repo": overrides.get("repo") or project,
+        "exclude": overrides.get("exclude") or [],
+    }
+
+
 def collect_source_files(project_path: Path, dest: Path) -> None:
     result = subprocess.run(
         ["git", "-C", str(project_path), "ls-files", "-z"],
@@ -178,12 +202,8 @@ def main() -> None:
 
     project_name = detect_project_name(project_path)
     version = detect_version(project_path)
-    team_name = args.team or detect_team(project_path)
-    if team_name:
-        team = re.sub(r"\s+", "-", team_name.strip())
-        zip_name = f"{team}-{project_name}-{version}.zip"
-    else:
-        zip_name = f"{project_name}-{version}.zip"
+    team = re.sub(r"\s+", "-", (args.team or detect_team(project_path)).strip())
+    zip_name = f"{team}-{project_name}-{version}.zip" if team else f"{project_name}-{version}.zip"
 
     if args.output:
         output_path = Path(args.output).resolve()
@@ -196,6 +216,9 @@ def main() -> None:
         staging = Path(tmp)
 
         collect_source_files(project_path, staging / "source")
+
+        config = load_pack_config(project_path, project_name, version, team)
+        (staging / "config.json").write_text(json.dumps(config, indent=2))
 
         if not args.no_deps:
             deps_dir = staging / "dependencies"

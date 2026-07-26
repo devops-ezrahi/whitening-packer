@@ -76,6 +76,45 @@ def test_team_prefix_in_output_zip():
         assert len(produced) == 1, list(out_dir.iterdir())
 
 
+def test_config_json_in_zip():
+    with tempfile.TemporaryDirectory() as tmp:
+        tmp_path = Path(tmp)
+        _init_repo(tmp_path)
+        (tmp_path / "package.json").write_text(json.dumps({"version": "9.9.9"}))
+        (tmp_path / "whitening.json").write_text(
+            json.dumps({"repo": "inner-widget", "exclude": [".github/**", "*.md"]})
+        )
+        _git(["add", "."], tmp_path)
+        _git(["commit", "-m", "init"], tmp_path)
+
+        out_dir = tmp_path / "out"
+        out_dir.mkdir()
+        result = subprocess.run(
+            [sys.executable, str(Path(pack.__file__).resolve()), str(tmp_path),
+             "--no-deps", "--no-images", "--team", "dvps", "-o", str(out_dir)],
+            capture_output=True, text=True,
+        )
+        assert result.returncode == 0, result.stderr
+        with zipfile.ZipFile(next(out_dir.glob("*.zip"))) as zf:
+            config = json.loads(zf.read("config.json"))
+        assert config == {
+            "project": tmp_path.name,
+            "version": "9.9.9",
+            "team": "dvps",
+            "repo": "inner-widget",
+            "exclude": [".github/**", "*.md"],
+        }, config
+
+
+def test_pack_config_defaults_repo_to_project():
+    with tempfile.TemporaryDirectory() as tmp:
+        config = pack.load_pack_config(Path(tmp), "widget", "1.0.0", "dvps")
+        assert config == {
+            "project": "widget", "version": "1.0.0", "team": "dvps",
+            "repo": "widget", "exclude": [],
+        }, config
+
+
 def test_detect_team_from_ci_config():
     with tempfile.TemporaryDirectory() as tmp:
         tmp_path = Path(tmp)
