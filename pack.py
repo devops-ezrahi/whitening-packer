@@ -96,22 +96,21 @@ def create_pack_tag(project_path: Path, version: str) -> str:
     return tag
 
 
-TEAM_RE = re.compile(r"^\s*TEAM:\s*['\"]?([A-Za-z0-9._-]+)", re.MULTILINE)
+def load_settings(project_path: Path) -> dict:
+    """Optional `whitening.json` at the project root — the project's pack settings.
 
-
-def detect_team(project_path: Path) -> str:
-    """Team name declared in a CI config, or '' if none.
-
-    Lets CI and local packs produce the same filename without anyone passing
-    --team. ponytail: a regex over the workflow files, not a YAML parse — no
-    new dependency for reading one scalar.
+    Everything a pack needs that can't be detected (team, closed-network repo
+    name, PR exclude globs, whether to pack base images) lives here, so CI and
+    local packs produce identical zips with nobody passing flags.
     """
-    for workflows in (".github/workflows", ".gitea/workflows"):
-        for cfg in sorted((project_path / workflows).glob("*.y*ml")):
-            match = TEAM_RE.search(cfg.read_text(errors="ignore"))
-            if match:
-                return match.group(1)
-    return ""
+    settings = project_path / "whitening.json"
+    if not settings.exists():
+        return {}
+    try:
+        return json.loads(settings.read_text())
+    except (json.JSONDecodeError, OSError) as err:
+        print(f"warning: ignoring unreadable whitening.json: {err}", file=sys.stderr)
+        return {}
 
 
 def detect_project_name(project_path: Path) -> str:
@@ -130,27 +129,16 @@ def detect_project_name(project_path: Path) -> str:
     return project_path.name
 
 
-def load_pack_config(project_path: Path, project: str, version: str, team: str) -> dict:
-    """The config.json written at the zip root — what the unpacker reads.
-
-    Project name/version/team are detected; the closed-network repo name and
-    the PR exclude globs can only come from the project, so an optional
-    `whitening.json` at its root supplies them.
-    """
-    overrides = {}
-    settings = project_path / "whitening.json"
-    if settings.exists():
-        try:
-            overrides = json.loads(settings.read_text())
-        except (json.JSONDecodeError, OSError) as err:
-            print(f"warning: ignoring unreadable whitening.json: {err}", file=sys.stderr)
-
+def build_pack_config(settings: dict, project: str, version: str, team: str) -> dict:
+    """The config.json written at the zip root — what the unpacker reads."""
     return {
         "project": project,
         "version": version,
         "team": team,
-        "repo": overrides.get("repo") or project,
-        "exclude": overrides.get("exclude") or [],
+        "repo": settings.get("repo") or project,
+        # Empty strings are dropped: as a git pathspec "" matches everything,
+        # so one stray entry would exclude the whole PR.
+        "exclude": [p for p in settings.get("exclude") or [] if p.strip()],
     }
 
 
@@ -189,7 +177,7 @@ def main() -> None:
     parser.add_argument("-o", "--output", help="output zip path or directory (default: current directory)")
     parser.add_argument("--team",
                         help="team name to prefix the output zip filename with "
-                             "(default: TEAM from the project's CI config, if any)")
+                             "(default: \"team\" from the project's whitening.json, if any)")
     args = parser.parse_args()
 
     project_path = Path(args.project_path).resolve()
@@ -200,9 +188,13 @@ def main() -> None:
         print(f"error: {project_path} is not a git project (.git not found)", file=sys.stderr)
         sys.exit(1)
 
+    settings = load_settings(project_path)
     project_name = detect_project_name(project_path)
     version = detect_version(project_path)
-    team = re.sub(r"\s+", "-", (args.team or detect_team(project_path)).strip())
+    team = re.sub(r"\s+", "-", (args.team or settings.get("team") or "").strip())
+    # "images": false in whitening.json is the project saying "never pack base
+    # images"; --no-images still wins when it's absent or true.
+    no_images = args.no_images or settings.get("images") is False
     zip_name = f"{team}-{project_name}-{version}.zip" if team else f"{project_name}-{version}.zip"
 
     if args.output:
@@ -217,7 +209,7 @@ def main() -> None:
 
         collect_source_files(project_path, staging / "source")
 
-        config = load_pack_config(project_path, project_name, version, team)
+        config = build_pack_config(settings, project_name, version, team)
         (staging / "config.json").write_text(json.dumps(config, indent=2))
 
         if not args.no_deps:
@@ -234,7 +226,7 @@ def main() -> None:
                               file=sys.stderr)
             ecosystems.copy_dependencies(project_path, deps_dir, include_paths)
 
-        if not args.no_images:
+        if not no_images:
             dockerimages.package_images(project_path, staging / "images")
 
         build_zip(staging, output_path)

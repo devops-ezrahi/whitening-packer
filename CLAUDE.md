@@ -16,31 +16,40 @@ no `origin` remote (local-only repos).
 python pack.py <project-path> [--team <name>] [--no-deps] [--all-deps] [--no-images] [-o <output>]
 ```
 
-`--team` prefixes the output filename (whitespace in the name becomes hyphens). When the
-flag is omitted, `detect_team` looks for a `TEAM:` key in the project's CI config
-(`.github/workflows/*.y*ml`, then `.gitea/workflows/*.y*ml`, first match wins) — so CI and
-local packs produce the same filename with nobody typing the team. Regex, not a YAML parse:
-one scalar isn't worth a PyYAML dependency. The `whitening-packer` skill only asks the user
-interactively when detection comes up empty — see `~/.claude/skills/whitening-packer/SKILL.md`.
+`--team` prefixes the output filename (whitespace in the name becomes hyphens); when
+omitted it comes from `whitening.json` (below). The `whitening-packer` skill only asks the
+user interactively when neither supplies one — see
+`~/.claude/skills/whitening-packer/SKILL.md`.
 
 Requires the target path to contain `.git` (hard requirement, not optional).
 
-## config.json (zip root)
+## whitening.json + config.json
 
-Every zip carries a `config.json` next to `source/`. It's what the consumer reads — the
-devops-portal whitening module parses it instead of the filename:
+`whitening.json` at the **project** root holds everything about a pack that can't be
+detected. It is the single source for both CI and local packs — no flags, no CI env vars
+to keep in sync (`load_settings`):
+
+```json
+{ "team": "dvps", "repo": "devops-portal", "images": false,
+  "exclude": [".github/**", ".gitea/**"] }
+```
+
+- `team` — zip filename prefix; `--team` overrides it.
+- `repo` — repo name on the closed-network git, when it differs from the project name.
+- `images: false` — never pack base images (same as `--no-images`, which still works).
+- `exclude` — glob patterns the unpacker keeps out of its pull request. Git pathspec
+  syntax, so `*` crosses `/` like in `.gitignore`. Empty strings are dropped — as a
+  pathspec `""` matches *everything*, and one stray entry would exclude the whole PR.
+
+Every zip then carries a `config.json` next to `source/`, which is what the consumer reads
+(the devops-portal whitening module parses it instead of the filename):
 
 ```json
 { "project": "devops-portal", "version": "1.0.4", "team": "dvps",
-  "repo": "devops-portal", "exclude": [".github/**"] }
+  "repo": "devops-portal", "exclude": [".github/**", ".gitea/**"] }
 ```
 
-`project`/`version`/`team` are detected as described above. `repo` (the repo name on the
-closed-network git, which may differ from the project name) and `exclude` (glob patterns
-the unpacker keeps out of its pull request — git pathspec syntax, so `*` crosses `/` like
-in `.gitignore`) can only come from the project: an optional `whitening.json` at the
-project root supplies them. No file → `repo` defaults to the project name, `exclude` to
-`[]`.
+No `whitening.json` → `repo` defaults to the project name, `exclude` to `[]`, team empty.
 
 ## Pack tags + delta dependencies
 

@@ -76,14 +76,16 @@ def test_team_prefix_in_output_zip():
         assert len(produced) == 1, list(out_dir.iterdir())
 
 
-def test_config_json_in_zip():
+def test_whitening_json_drives_the_pack():
+    """Team, repo and excludes all come from whitening.json — no flags."""
     with tempfile.TemporaryDirectory() as tmp:
         tmp_path = Path(tmp)
         _init_repo(tmp_path)
         (tmp_path / "package.json").write_text(json.dumps({"version": "9.9.9"}))
-        (tmp_path / "whitening.json").write_text(
-            json.dumps({"repo": "inner-widget", "exclude": [".github/**", "*.md"]})
-        )
+        (tmp_path / "whitening.json").write_text(json.dumps({
+            "team": "dvps", "repo": "inner-widget", "images": False,
+            "exclude": [".github/**", "*.md"],
+        }))
         _git(["add", "."], tmp_path)
         _git(["commit", "-m", "init"], tmp_path)
 
@@ -91,12 +93,16 @@ def test_config_json_in_zip():
         out_dir.mkdir()
         result = subprocess.run(
             [sys.executable, str(Path(pack.__file__).resolve()), str(tmp_path),
-             "--no-deps", "--no-images", "--team", "dvps", "-o", str(out_dir)],
+             "--no-deps", "-o", str(out_dir)],
             capture_output=True, text=True,
         )
         assert result.returncode == 0, result.stderr
-        with zipfile.ZipFile(next(out_dir.glob("*.zip"))) as zf:
+        produced = next(out_dir.glob("*.zip"))
+        assert produced.name.startswith("dvps-"), produced.name
+        with zipfile.ZipFile(produced) as zf:
             config = json.loads(zf.read("config.json"))
+            # "images": false stood in for --no-images.
+            assert not [n for n in zf.namelist() if n.startswith("images/")], zf.namelist()
         assert config == {
             "project": tmp_path.name,
             "version": "9.9.9",
@@ -106,24 +112,24 @@ def test_config_json_in_zip():
         }, config
 
 
-def test_pack_config_defaults_repo_to_project():
-    with tempfile.TemporaryDirectory() as tmp:
-        config = pack.load_pack_config(Path(tmp), "widget", "1.0.0", "dvps")
-        assert config == {
-            "project": "widget", "version": "1.0.0", "team": "dvps",
-            "repo": "widget", "exclude": [],
-        }, config
+def test_pack_config_defaults_and_empty_exclude_dropped():
+    # "" as a git pathspec matches everything — it must never reach config.json.
+    config = pack.build_pack_config({"exclude": ["docs/**", ""]}, "widget", "1.0.0", "")
+    assert config == {
+        "project": "widget", "version": "1.0.0", "team": "",
+        "repo": "widget", "exclude": ["docs/**"],
+    }, config
+    assert pack.build_pack_config({}, "widget", "1.0.0", "dvps")["exclude"] == []
 
 
-def test_detect_team_from_ci_config():
+def test_load_settings_missing_and_broken():
     with tempfile.TemporaryDirectory() as tmp:
         tmp_path = Path(tmp)
-        assert pack.detect_team(tmp_path) == ""
-
-        workflows = tmp_path / ".github" / "workflows"
-        workflows.mkdir(parents=True)
-        (workflows / "ci.yml").write_text("name: CI\n\nenv:\n  TEAM: dvps\n")
-        assert pack.detect_team(tmp_path) == "dvps"
+        assert pack.load_settings(tmp_path) == {}
+        (tmp_path / "whitening.json").write_text("{ not json")
+        assert pack.load_settings(tmp_path) == {}
+        (tmp_path / "whitening.json").write_text(json.dumps({"team": "dvps"}))
+        assert pack.load_settings(tmp_path) == {"team": "dvps"}
 
 
 def test_detect_version_package_json():
