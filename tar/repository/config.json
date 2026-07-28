@@ -1,0 +1,10 @@
+{
+  "version": "1.0.1",
+  "repos": {
+    "<project name>": {
+      "department": "ultra",
+      "team": "optimus",
+      "repository": "ultra-supporting-services"
+    }
+  }
+}

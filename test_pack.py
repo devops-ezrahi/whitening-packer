@@ -1,10 +1,11 @@
 """Plain-assert self-checks. Run directly: python test_pack.py"""
 
 import json
+import os
 import subprocess
 import sys
+import tarfile
 import tempfile
-import zipfile
 from pathlib import Path
 
 import dockerimages
@@ -56,70 +57,66 @@ def test_detect_project_name_falls_back_to_dir_when_no_remote():
         assert pack.detect_project_name(tmp_path) == "my-local-dir"
 
 
-def test_team_prefix_in_output_zip():
+def test_pack_layout_and_config_from_ci():
+    """department/team/repository come from the CI (env vars here), tags from git."""
     with tempfile.TemporaryDirectory() as tmp:
         tmp_path = Path(tmp)
         _init_repo(tmp_path)
-        (tmp_path / "file.txt").write_text("hi")
+        (tmp_path / "package.json").write_text(json.dumps({"version": "1.0.1"}))
         _git(["add", "."], tmp_path)
         _git(["commit", "-m", "init"], tmp_path)
+        _git(["tag", "1.0.0"], tmp_path)
+        _git(["tag", "1.0.1"], tmp_path)
+        _git(["tag", "pack/1.0.0-20260101T000000Z"], tmp_path)
 
         out_dir = tmp_path / "out"
         out_dir.mkdir()
+        env = {**os.environ, "WHITENING_DEPARTMENT": "ultra", "WHITENING_TEAM": "optimus",
+               "WHITENING_REPOSITORY": "ultra-supporting-services"}
         result = subprocess.run(
             [sys.executable, str(Path(pack.__file__).resolve()), str(tmp_path),
-             "--no-deps", "--no-images", "--team", "Team One", "-o", str(out_dir)],
-            capture_output=True, text=True,
+             "--no-deps", "--no-images", "-o", str(out_dir)],
+            capture_output=True, text=True, env=env,
         )
         assert result.returncode == 0, result.stderr
-        produced = list(out_dir.glob("Team-One-*.zip"))
-        assert len(produced) == 1, list(out_dir.iterdir())
+        produced = next(out_dir.glob("*.tgz"))
+        assert produced.name == "optimus-ultra-supporting-services-1.0.1.tgz", produced.name
 
-
-def test_whitening_json_drives_the_pack():
-    """Team, repo and excludes all come from whitening.json — no flags."""
-    with tempfile.TemporaryDirectory() as tmp:
-        tmp_path = Path(tmp)
-        _init_repo(tmp_path)
-        (tmp_path / "package.json").write_text(json.dumps({"version": "9.9.9"}))
-        (tmp_path / "whitening.json").write_text(json.dumps({
-            "team": "dvps", "repo": "inner-widget", "images": False,
-            "exclude": [".github/**", "*.md"],
-        }))
-        _git(["add", "."], tmp_path)
-        _git(["commit", "-m", "init"], tmp_path)
-
-        out_dir = tmp_path / "out"
-        out_dir.mkdir()
-        result = subprocess.run(
-            [sys.executable, str(Path(pack.__file__).resolve()), str(tmp_path),
-             "--no-deps", "-o", str(out_dir)],
-            capture_output=True, text=True,
-        )
-        assert result.returncode == 0, result.stderr
-        produced = next(out_dir.glob("*.zip"))
-        assert produced.name.startswith("dvps-"), produced.name
-        with zipfile.ZipFile(produced) as zf:
-            config = json.loads(zf.read("config.json"))
-            # "images": false stood in for --no-images.
-            assert not [n for n in zf.namelist() if n.startswith("images/")], zf.namelist()
+        with tarfile.open(produced) as tf:
+            names = tf.getnames()
+            config = json.loads(tf.extractfile("repository/config.json").read())
+            tags = tf.extractfile("repository/tags").read().decode()
+        assert "images" in names and "node_modules" in names, names
+        assert "repository/ultra-supporting-services/package.json" in names, names
         assert config == {
-            "project": tmp_path.name,
-            "version": "9.9.9",
-            "team": "dvps",
-            "repo": "inner-widget",
-            "exclude": [".github/**", "*.md"],
+            "version": "1.0.1",
+            "repos": {tmp_path.name: {"department": "ultra", "team": "optimus",
+                                      "repository": "ultra-supporting-services"}},
         }, config
+        # pack/* is ours, not the project's.
+        assert tags == "1.0.0\n1.0.1\n", tags
 
 
-def test_pack_config_defaults_and_empty_exclude_dropped():
-    # "" as a git pathspec matches everything — it must never reach config.json.
-    config = pack.build_pack_config({"exclude": ["docs/**", ""]}, "widget", "1.0.0", "")
-    assert config == {
-        "project": "widget", "version": "1.0.0", "team": "",
-        "repo": "widget", "exclude": ["docs/**"],
-    }, config
-    assert pack.build_pack_config({}, "widget", "1.0.0", "dvps")["exclude"] == []
+def test_missing_ci_values_fail():
+    with tempfile.TemporaryDirectory() as tmp:
+        tmp_path = Path(tmp)
+        _init_repo(tmp_path)
+        env = {k: v for k, v in os.environ.items() if not k.startswith("WHITENING_")}
+        result = subprocess.run(
+            [sys.executable, str(Path(pack.__file__).resolve()), str(tmp_path),
+             "--department", "ultra"],
+            capture_output=True, text=True, env=env,
+        )
+        assert result.returncode == 1
+        assert "missing team, repository" in result.stderr, result.stderr
+
+
+def test_build_pack_config():
+    assert pack.build_pack_config("widget", "1.0.0", "ultra", "optimus", "inner-widget") == {
+        "version": "1.0.0",
+        "repos": {"widget": {"department": "ultra", "team": "optimus",
+                             "repository": "inner-widget"}},
+    }
 
 
 def test_load_settings_missing_and_broken():
@@ -187,23 +184,21 @@ def test_collect_source_files():
         assert not (dest / "ignored.txt").exists()
 
 
-def test_build_zip():
+def test_build_tgz_keeps_empty_dirs():
     with tempfile.TemporaryDirectory() as tmp:
         staging = Path(tmp) / "staging"
-        (staging / "source").mkdir(parents=True)
-        (staging / "source" / "a.txt").write_text("a")
-        (staging / "dependencies").mkdir(parents=True)
-        (staging / "dependencies" / "b.txt").write_text("b")
+        (staging / "repository" / "widget").mkdir(parents=True)
+        (staging / "repository" / "widget" / "a.txt").write_text("a")
+        (staging / "node_modules").mkdir(parents=True)
         (staging / "images").mkdir(parents=True)
-        (staging / "images" / "c.tar").write_text("c")
 
-        output = Path(tmp) / "out.zip"
-        pack.build_zip(staging, output)
+        output = Path(tmp) / "out.tgz"
+        pack.build_tgz(staging, output)
 
-        names = zipfile.ZipFile(output).namelist()
-        assert any(n.startswith("source") for n in names)
-        assert any(n.startswith("dependencies") for n in names)
-        assert any(n.startswith("images") for n in names)
+        with tarfile.open(output) as tf:
+            names = tf.getnames()
+        assert "repository/widget/a.txt" in names, names
+        assert "images" in names and "node_modules" in names, names
 
 
 def test_dependency_ecosystems_table():

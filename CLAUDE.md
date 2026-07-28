@@ -1,55 +1,67 @@
 # whitening packer
 
-Python CLI that packs a git project into one zip: `[<team>-]<name>-<version>.zip`
-containing `source/` (git-tracked files), `dependencies/` (installed deps), `images/`
-(Docker base images referenced by any Dockerfile). Built for handing off/archiving a
-reproducible snapshot of a project.
+Python CLI that packs a git project into one gzipped tar,
+`<team>-<repository>-<version>.tgz`, with this exact layout (see `tar/` for the
+reference tree):
 
-`<name>` comes from the git remote (`git remote get-url origin`, basename minus `.git`),
-not the local directory name — so a folder renamed/cloned under a different name still
-produces a zip named after the actual repo. Falls back to the directory name if there's
-no `origin` remote (local-only repos).
+```
+images/                        Docker base images referenced by any Dockerfile
+node_modules/                  installed deps
+repository/
+  config.json
+  tags                         the project's git tags, one per line, oldest first
+  <repository>/                git-tracked source
+```
+
+Built for handing off/archiving a reproducible snapshot of a project.
 
 ## Usage
 
 ```
-python pack.py <project-path> [--team <name>] [--no-deps] [--all-deps] [--no-images] [-o <output>]
+python pack.py <project-path> --department <d> --team <t> --repository <r> \
+               [--no-deps] [--all-deps] [--no-images] [-o <output>]
 ```
 
-`--team` prefixes the output filename (whitespace in the name becomes hyphens); when
-omitted it comes from `whitening.json` (below). The `whitening-packer` skill only asks the
-user interactively when neither supplies one — see
-`~/.claude/skills/whitening-packer/SKILL.md`.
+**department / team / repository come from the CI job that runs the script** — each flag
+falls back to `$WHITENING_DEPARTMENT` / `$WHITENING_TEAM` / `$WHITENING_REPOSITORY`, and
+all three are required (whitespace in a value becomes hyphens). `<repository>` is the repo
+name on the closed-network git; it names the source folder inside `repository/`.
 
 Requires the target path to contain `.git` (hard requirement, not optional).
 
-## whitening.json + config.json
+## config.json + tags
 
-`whitening.json` at the **project** root holds everything about a pack that can't be
-detected. It is the single source for both CI and local packs — no flags, no CI env vars
-to keep in sync (`load_settings`):
+`repository/config.json` is what the consumer reads:
 
 ```json
-{ "team": "dvps", "repo": "devops-portal", "images": false,
-  "exclude": [".github/**", ".gitea/**"] }
+{
+  "version": "1.0.1",
+  "repos": {
+    "devops-portal": {
+      "department": "ultra",
+      "team": "optimus",
+      "repository": "ultra-supporting-services"
+    }
+  }
+}
 ```
 
-- `team` — zip filename prefix; `--team` overrides it.
-- `repo` — repo name on the closed-network git, when it differs from the project name.
-- `images: false` — never pack base images (same as `--no-images`, which still works).
-- `exclude` — glob patterns the unpacker keeps out of its pull request. Git pathspec
-  syntax, so `*` crosses `/` like in `.gitignore`. Empty strings are dropped — as a
-  pathspec `""` matches *everything*, and one stray entry would exclude the whole PR.
+The `repos` key is the **project name** from the git remote (`git remote get-url origin`,
+basename minus `.git`), not the local directory name — so a folder renamed/cloned under a
+different name still keys on the actual repo. Falls back to the directory name if there's
+no `origin` remote (local-only repos).
 
-Every zip then carries a `config.json` next to `source/`, which is what the consumer reads
-(the devops-portal whitening module parses it instead of the filename):
+`repository/tags` is `git tag --sort=v:refname` with `pack/*` filtered out (those are the
+packer's own, below — not the project's).
+
+## whitening.json
+
+Optional, at the **project** root (`load_settings`). Only `images: false` is read from it
+now — "never pack base images", same as `--no-images`:
 
 ```json
-{ "project": "devops-portal", "version": "1.0.4", "team": "dvps",
-  "repo": "devops-portal", "exclude": [".github/**", ".gitea/**"] }
+{ "images": false }
 ```
-
-No `whitening.json` → `repo` defaults to the project name, `exclude` to `[]`, team empty.
 
 ## Pack tags + delta dependencies
 
@@ -61,7 +73,7 @@ remotes; elsewhere push them yourself if you want them shared.
 On the next pack, if **not** `--all-deps`, the packer finds the last `pack/*` tag
 reachable from HEAD (`git describe --tags --abbrev=0 --match 'pack/*'`) and packs
 **only the dependencies whose lockfile entry changed since then** — a *delta*
-bundle. Delta zips are meant to be unzipped **on top of** the previous bundle.
+bundle. Delta tarballs are meant to be extracted **on top of** the previous bundle.
 
 - `--all-deps` — force a full dependency copy (no delta).
 - No prior `pack/*` tag, or `package-lock.json` not tracked at that tag → full copy.
@@ -72,7 +84,8 @@ bundle. Delta zips are meant to be unzipped **on top of** the previous bundle.
 
 ## Files
 
-- `pack.py` — CLI entry point, orchestration, version detection, zip assembly.
+- `pack.py` — CLI entry point, orchestration, version detection, tgz assembly.
+- `tar/` — reference tree for the output layout. Match it, don't re-derive it.
 - `ecosystems.py` — dependency-ecosystem table (npm, maven) + copy logic. Add a new
   ecosystem by appending one entry to `DEPENDENCY_ECOSYSTEMS`; no plugin system, it's a
   flat list on purpose.
@@ -120,5 +133,5 @@ bundle. Delta zips are meant to be unzipped **on top of** the previous bundle.
 - Dockerfile ARG resolution only covers top-of-file default values, not `--build-arg`
   overrides or per-stage redeclaration.
 - No filename sanitization on weird `git describe` output.
-- No new pip dependencies — stdlib only (`zipfile`, `shutil`, `subprocess`, `pathlib`,
+- No new pip dependencies — stdlib only (`tarfile`, `shutil`, `subprocess`, `pathlib`,
   `json`, `re`, `tempfile`, `xml.etree.ElementTree`).
