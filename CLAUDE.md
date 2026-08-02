@@ -63,20 +63,27 @@ now — "never pack base images", same as `--no-images`:
 { "images": false }
 ```
 
-## Pack tags + delta dependencies
+## Delta dependencies
 
-Every successful pack creates a lightweight git tag on HEAD:
-`pack/<version>-<UTC-timestamp>` (e.g. `pack/1.0.2-20260724T161500Z`). This marks
-"what was last shipped". The devops-portal Stop hook pushes `pack/*` tags to both
-remotes; elsewhere push them yourself if you want them shared.
+The packer creates no tags of its own. It used to tag every pack
+`pack/<version>-<UTC-timestamp>`; that stamp only existed so two packs of the same
+version wouldn't collide, and it made for ugly tags and duplicate releases. The
+release tag is now the baseline — one tag, one release, one pack per version.
 
-On the next pack, if **not** `--all-deps`, the packer finds the last `pack/*` tag
-reachable from HEAD (`git describe --tags --abbrev=0 --match 'pack/*'`) and packs
-**only the dependencies whose lockfile entry changed since then** — a *delta*
-bundle. Delta tarballs are meant to be extracted **on top of** the previous bundle.
+If **not** `--all-deps`, `last_release_tag` finds the last tag reachable from HEAD
+(`git describe --tags --abbrev=0`, excluding `pack/*` and the version being packed)
+and packs **only the dependencies whose lockfile entry changed since then** — a
+*delta* bundle. Delta tarballs are meant to be extracted **on top of** the previous
+bundle.
+
+The version excludes matter: CI runs semantic-release first, so `v<version>` is
+already on HEAD when the packer runs, and without them the baseline would be the
+release being packed — every delta would come out empty.
 
 - `--all-deps` — force a full dependency copy (no delta).
-- No prior `pack/*` tag, or `package-lock.json` not tracked at that tag → full copy.
+- No prior tag, or `package-lock.json` not tracked at that tag → full copy.
+- Old `pack/*` tags still exist in repos packed before this change; they're excluded
+  everywhere they'd otherwise be mistaken for a release tag.
 - **npm-only.** The signal is `package-lock.json` (node_modules is gitignored, so
   `git diff` can't see dep changes). The linux-x64 extra-platform merge is filtered
   to the same changed set, so changed linux-native binaries come along. Maven has no

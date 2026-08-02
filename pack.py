@@ -11,7 +11,6 @@ import sys
 import tarfile
 import tempfile
 import xml.etree.ElementTree as ET
-from datetime import datetime, timezone
 from pathlib import Path
 
 import dockerimages
@@ -56,10 +55,16 @@ def detect_version(project_path: Path) -> str:
     return "unknown"
 
 
-def last_pack_tag(project_path: Path) -> str:
-    """Most recent pack/* tag reachable from HEAD, or '' if none."""
+def last_release_tag(project_path: Path, version: str) -> str:
+    """Last release tag reachable from HEAD, excluding the one being packed.
+
+    The version excludes are load-bearing: CI tags HEAD (semantic-release) before
+    running the packer, so without them the delta baseline would be the release
+    being packed and every delta bundle would come out empty.
+    """
     result = subprocess.run(
-        ["git", "describe", "--tags", "--abbrev=0", "--match", "pack/*"],
+        ["git", "describe", "--tags", "--abbrev=0", "--exclude", "pack/*",
+         "--exclude", f"v{version}", "--exclude", version],
         cwd=project_path, capture_output=True, text=True,
     )
     return result.stdout.strip() if result.returncode == 0 else ""
@@ -81,20 +86,6 @@ def changed_dep_paths(project_path: Path, base_tag: str):
     if not new_lock.exists():
         return None
     return ecosystems.changed_npm_packages(show.stdout, new_lock.read_text())
-
-
-def create_pack_tag(project_path: Path, version: str) -> str:
-    """Lightweight tag on HEAD marking this pack; returns the tag name or ''."""
-    safe = re.sub(r"[\s/]+", "-", version.strip())
-    stamp = datetime.now(timezone.utc).strftime("%Y%m%dT%H%M%SZ")
-    tag = f"pack/{safe}-{stamp}"
-    result = subprocess.run(
-        ["git", "-C", str(project_path), "tag", tag], capture_output=True, text=True
-    )
-    if result.returncode != 0:
-        print(f"warning: could not create tag {tag}: {result.stderr.strip()}", file=sys.stderr)
-        return ""
-    return tag
 
 
 def load_settings(project_path: Path) -> dict:
@@ -247,7 +238,7 @@ def main() -> None:
 
             include_paths = None
             if not args.all_deps:
-                base_tag = last_pack_tag(project_path)
+                base_tag = last_release_tag(project_path, version)
                 if base_tag:
                     include_paths = changed_dep_paths(project_path, base_tag)
                     if include_paths is not None:
@@ -260,10 +251,7 @@ def main() -> None:
 
         build_tgz(staging, output_path)
 
-    tag = create_pack_tag(project_path, version)
     print(output_path)
-    if tag:
-        print(f"tagged {tag}", file=sys.stderr)
 
 
 if __name__ == "__main__":

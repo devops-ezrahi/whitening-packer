@@ -163,6 +163,24 @@ def test_detect_version_git_fallback():
         assert version and version != "unknown"
 
 
+def test_last_release_tag_skips_the_version_being_packed():
+    """CI tags HEAD before packing — that tag must not become its own baseline."""
+    with tempfile.TemporaryDirectory() as tmp:
+        tmp_path = Path(tmp)
+        _init_repo(tmp_path)
+        (tmp_path / "file.txt").write_text("hi")
+        _git(["add", "."], tmp_path)
+        _git(["commit", "-m", "init"], tmp_path)
+        _git(["tag", "v1.0.0"], tmp_path)
+        (tmp_path / "file.txt").write_text("bye")
+        _git(["commit", "-am", "next"], tmp_path)
+        _git(["tag", "v1.0.1"], tmp_path)
+        _git(["tag", "pack/1.0.1-20260101T000000Z"], tmp_path)
+
+        assert pack.last_release_tag(tmp_path, "1.0.1") == "v1.0.0"
+        assert pack.last_release_tag(tmp_path, "1.0.2") == "v1.0.1"
+
+
 def test_collect_source_files():
     with tempfile.TemporaryDirectory() as tmp:
         tmp_path = Path(tmp)
