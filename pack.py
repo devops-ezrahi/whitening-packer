@@ -121,13 +121,24 @@ def detect_project_name(project_path: Path) -> str:
     return project_path.name
 
 
-def git_tags(project_path: Path) -> list[str]:
-    """The project's own tags, oldest first. pack/* (ours) never belongs here."""
-    result = subprocess.run(
-        ["git", "-C", str(project_path), "tag", "--sort=v:refname"],
-        capture_output=True, text=True,
+def deleted_paths(project_path: Path) -> list[str]:
+    """Every path ever deleted in this repo, minus any that came back.
+
+    Recomputed over the whole log on every pack, so the list stays cumulative
+    without carrying state between packs — new deletions just show up.
+    --no-renames so a rename counts as a delete of the old path: deltas are
+    extracted on top of the previous bundle, which still has that file.
+    """
+    log = subprocess.run(
+        ["git", "-C", str(project_path), "log", "--diff-filter=D", "--no-renames",
+         "--name-only", "--format=", "-z"],
+        capture_output=True,
     )
-    return [t for t in result.stdout.split() if not t.startswith("pack/")]
+    tracked = subprocess.run(
+        ["git", "-C", str(project_path), "ls-files", "-z"], capture_output=True,
+    )
+    deleted = {p for p in log.stdout.decode().split("\0") if p}
+    return sorted(deleted - set(tracked.stdout.decode().split("\0")))
 
 
 def build_pack_config(project: str, version: str,
@@ -207,7 +218,7 @@ def main() -> None:
     # "images": false in whitening.json is the project saying "never pack base
     # images"; --no-images still wins when it's absent or true.
     no_images = args.no_images or settings.get("images") is False
-    tgz_name = f"{team}-{repository}-{version}.tgz"
+    tgz_name = f"{repository}-{version}.tgz"
 
     if args.output:
         output_path = Path(args.output).resolve()
@@ -228,8 +239,8 @@ def main() -> None:
         config = build_pack_config(project_name, version, department, team, repository)
         # newline="\n": these are read on Linux, not on whatever packed them.
         (repo_dir / "config.json").write_text(json.dumps(config, indent=2), newline="\n")
-        (repo_dir / "tags").write_text("".join(f"{t}\n" for t in git_tags(project_path)),
-                                       newline="\n")
+        (repo_dir / "to_delete").write_text(
+            "".join(f"{p}\n" for p in deleted_paths(project_path)), newline="\n")
 
         if not args.no_deps:
             # Dest is the tar root: npm lands in node_modules/ as the layout wants.

@@ -58,16 +58,21 @@ def test_detect_project_name_falls_back_to_dir_when_no_remote():
 
 
 def test_pack_layout_and_config_from_ci():
-    """department/team/repository come from the CI (env vars here), tags from git."""
+    """department/team/repository come from the CI (env vars here)."""
     with tempfile.TemporaryDirectory() as tmp:
         tmp_path = Path(tmp)
         _init_repo(tmp_path)
         (tmp_path / "package.json").write_text(json.dumps({"version": "1.0.1"}))
+        (tmp_path / "gone.txt").write_text("bye")
+        (tmp_path / "back.txt").write_text("hi")
         _git(["add", "."], tmp_path)
         _git(["commit", "-m", "init"], tmp_path)
-        _git(["tag", "1.0.0"], tmp_path)
-        _git(["tag", "1.0.1"], tmp_path)
-        _git(["tag", "pack/1.0.0-20260101T000000Z"], tmp_path)
+        (tmp_path / "gone.txt").unlink()
+        (tmp_path / "back.txt").unlink()
+        _git(["commit", "-am", "delete"], tmp_path)
+        (tmp_path / "back.txt").write_text("hi again")
+        _git(["add", "."], tmp_path)
+        _git(["commit", "-m", "readd"], tmp_path)
 
         out_dir = tmp_path / "out"
         out_dir.mkdir()
@@ -80,12 +85,12 @@ def test_pack_layout_and_config_from_ci():
         )
         assert result.returncode == 0, result.stderr
         produced = next(out_dir.glob("*.tgz"))
-        assert produced.name == "optimus-ultra-supporting-services-1.0.1.tgz", produced.name
+        assert produced.name == "ultra-supporting-services-1.0.1.tgz", produced.name
 
         with tarfile.open(produced) as tf:
             names = tf.getnames()
             config = json.loads(tf.extractfile("repository/config.json").read())
-            tags = tf.extractfile("repository/tags").read().decode()
+            to_delete = tf.extractfile("repository/to_delete").read().decode()
         assert "images" in names and "node_modules" in names, names
         assert "repository/ultra-supporting-services/package.json" in names, names
         assert config == {
@@ -93,8 +98,8 @@ def test_pack_layout_and_config_from_ci():
             "repos": {tmp_path.name: {"department": "ultra", "team": "optimus",
                                       "repository": "ultra-supporting-services"}},
         }, config
-        # pack/* is ours, not the project's.
-        assert tags == "1.0.0\n1.0.1\n", tags
+        # back.txt was deleted then re-added — it's alive, so it stays off the list.
+        assert to_delete == "gone.txt\n", to_delete
 
 
 def test_missing_ci_values_fail():

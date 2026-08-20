@@ -1,7 +1,7 @@
 # whitening packer
 
 Python CLI that packs a git project into one gzipped tar,
-`<team>-<repository>-<version>.tgz`, with this exact layout (see `tar/` for the
+`<repository>-<version>.tgz`, with this exact layout (see `tar/` for the
 reference tree):
 
 ```
@@ -9,7 +9,7 @@ images/                        Docker base images referenced by any Dockerfile
 node_modules/                  installed deps
 repository/
   config.json
-  tags                         the project's git tags, one per line, oldest first
+  to_delete                    every path ever deleted from the repo, one per line
   <repository>/                git-tracked source
 ```
 
@@ -29,7 +29,7 @@ name on the closed-network git; it names the source folder inside `repository/`.
 
 Requires the target path to contain `.git` (hard requirement, not optional).
 
-## config.json + tags
+## config.json + to_delete
 
 `repository/config.json` is what the consumer reads:
 
@@ -51,8 +51,12 @@ basename minus `.git`), not the local directory name — so a folder renamed/clo
 different name still keys on the actual repo. Falls back to the directory name if there's
 no `origin` remote (local-only repos).
 
-`repository/tags` is `git tag --sort=v:refname` with `pack/*` filtered out (those are the
-packer's own, below — not the project's).
+`repository/to_delete` is every path ever deleted from the repo — `git log
+--diff-filter=D --no-renames --name-only` over the whole history, minus anything still
+tracked at HEAD (deleted-then-re-added files are alive, so they stay off the list).
+Recomputed from scratch each pack, which is what keeps it cumulative without any state
+carried between packs. The consumer extracts a delta on top of the previous bundle and
+deletes these.
 
 ## whitening.json
 
