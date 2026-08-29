@@ -121,18 +121,52 @@ def detect_project_name(project_path: Path) -> str:
     return project_path.name
 
 
-def deleted_paths(project_path: Path, base_tag: str) -> list[str]:
-    """Source files deleted since base_tag — repo-relative, as they sit under repository/.
+def deleted_paths(project_path: Path, base: str, head: str = "") -> list[str]:
+    """Source files deleted between base and head (default: the working tree).
 
-    A pack is extracted on top of the previous one, so a file dropped from the
-    repo would otherwise live forever in the unpacked tree; this is the list the
-    consumer deletes.
+    Repo-relative, exactly as they sit under repository/<repository>/. A pack is
+    extracted on top of the previous one, so a file dropped from the repo would
+    otherwise live on forever in the unpacked tree; this is the delete list.
     """
     result = subprocess.run(
-        ["git", "-C", str(project_path), "diff", "--name-only", "--diff-filter=D", base_tag],
+        ["git", "-C", str(project_path), "diff", "--name-only", "--diff-filter=D", base]
+        + ([head] if head else []),
         capture_output=True, text=True,
     )
     return sorted(p for p in result.stdout.splitlines() if p)
+
+
+def release_tags(project_path: Path, version: str) -> list[str]:
+    """Release tags reachable from HEAD, oldest first.
+
+    pack/* are the packer's own (historic), and the version being packed is
+    already tagged by CI before the packer runs — it is this pack, not a
+    previous release.
+    """
+    result = subprocess.run(
+        ["git", "-C", str(project_path), "tag", "--sort=v:refname", "--merged", "HEAD"],
+        capture_output=True, text=True,
+    )
+    return [t for t in result.stdout.split()
+            if not t.startswith("pack/") and t not in (version, f"v{version}")]
+
+
+def write_delete_lists(project_path: Path, dest: Path, version: str) -> None:
+    """One file per release: what that release deleted, whole history included.
+
+    Not just this pack's deletions — a consumer extracting onto a tree several
+    releases old still learns about every path that has gone since. A file added
+    and deleted within one release interval never shows up: neither end of the
+    diff has it, which is exactly right.
+    """
+    dest.mkdir()
+    tags = release_tags(project_path, version)
+    for base, head in zip(tags, tags[1:] + [""]):
+        paths = deleted_paths(project_path, base, head)
+        if paths:
+            # A tag can contain "/" and would otherwise nest a folder in the tar.
+            name = (head or version).replace("/", "-")
+            (dest / name).write_text("".join(f"{p}\n" for p in paths), newline="\n")
 
 
 def build_pack_config(project: str, version: str,
@@ -235,14 +269,7 @@ def main() -> None:
         (repo_dir / "config.json").write_text(json.dumps(config, indent=2), newline="\n")
 
         base_tag = last_release_tag(project_path, version)
-
-        # One file per pack, named for the version: extracting packs in order
-        # accumulates the folder instead of overwriting a single list.
-        (staging / "to_delete").mkdir()
-        deleted = deleted_paths(project_path, base_tag) if base_tag else []
-        if deleted:
-            (staging / "to_delete" / version).write_text(
-                "".join(f"{p}\n" for p in deleted), newline="\n")
+        write_delete_lists(project_path, staging / "to_delete", version)
 
         if not args.no_deps:
             # Dest is the tar root: npm lands in node_modules/ as the layout wants.

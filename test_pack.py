@@ -179,21 +179,40 @@ def test_last_release_tag_skips_the_version_being_packed():
         assert pack.last_release_tag(tmp_path, "1.0.2") == "v1.0.1"
 
 
-def test_deleted_paths_since_base_tag():
+def test_delete_lists_cover_every_release():
+    """One file per release, all of history — not just this pack's deletions."""
     with tempfile.TemporaryDirectory() as tmp:
         tmp_path = Path(tmp)
         _init_repo(tmp_path)
-        (tmp_path / "keep.txt").write_text("keep")
-        (tmp_path / "gone.txt").write_text("gone")
-        (tmp_path / "sub").mkdir()
-        (tmp_path / "sub" / "also-gone.txt").write_text("gone")
+        for name in ("keep.txt", "gone-in-2.txt", "sub/gone-in-3.txt"):
+            path = tmp_path / name
+            path.parent.mkdir(parents=True, exist_ok=True)
+            path.write_text(name)
         _git(["add", "."], tmp_path)
         _git(["commit", "-m", "init"], tmp_path)
         _git(["tag", "v1.0.0"], tmp_path)
-        _git(["rm", "-q", "gone.txt", "sub/also-gone.txt"], tmp_path)
-        _git(["commit", "-m", "drop"], tmp_path)
 
-        assert pack.deleted_paths(tmp_path, "v1.0.0") == ["gone.txt", "sub/also-gone.txt"]
+        _git(["rm", "-q", "gone-in-2.txt"], tmp_path)
+        _git(["commit", "-m", "drop one"], tmp_path)
+        _git(["tag", "v1.0.1"], tmp_path)
+
+        # Added and deleted inside one interval: never in either snapshot, so it
+        # is fine for it to be missing from the lists.
+        (tmp_path / "transient.txt").write_text("x")
+        _git(["add", "."], tmp_path)
+        _git(["commit", "-m", "add transient"], tmp_path)
+        _git(["rm", "-q", "transient.txt", "sub/gone-in-3.txt"], tmp_path)
+        _git(["commit", "-m", "drop more"], tmp_path)
+        _git(["tag", "v1.0.2"], tmp_path)   # the version being packed
+
+        dest = tmp_path / "to_delete"
+        pack.write_delete_lists(tmp_path, dest, "1.0.2")
+
+        assert sorted(f.name for f in dest.iterdir()) == ["1.0.2", "v1.0.1"]
+        assert (dest / "v1.0.1").read_text() == "gone-in-2.txt\n"
+        # v1.0.2 is this pack: its list is named for the version, not the tag.
+        assert (dest / "1.0.2").read_text() == "sub/gone-in-3.txt\n"
+        assert not (dest / "v1.0.0").exists()   # nothing was deleted by the first release
 
 
 def test_collect_source_files():

@@ -8,7 +8,7 @@ reference tree):
 images/                        Docker base images referenced by any Dockerfile
 node_modules/                  installed deps
 to_delete/
-  <version>                    paths deleted since the last release tag, one per line
+  <release>                    paths that release deleted, one per line (all releases)
 repository/
   config.json
   <repository>/                git-tracked source
@@ -55,13 +55,18 @@ no `origin` remote (local-only repos).
 ## to_delete
 
 A pack is extracted **on top of** the previous one, so a file dropped from the repo would
-otherwise live on forever in the unpacked tree. `to_delete/<version>` lists the paths
-`git diff --diff-filter=D <last release tag>` reports — repo-relative, exactly as they sit
-under `repository/<repository>/` — and the consumer deletes them.
+otherwise live on forever in the unpacked tree. `to_delete/` is the delete list: paths
+repo-relative, exactly as they sit under `repository/<repository>/`.
 
-One file per pack, named for the version, rather than a single list file: extracting packs
-in order then *accumulates* the folder instead of each pack overwriting the last one's
-list. No baseline tag (first pack) → the folder ships empty.
+**Every pack carries the whole history, not just its own deletions** — one file per release
+tag reachable from HEAD (`git diff --name-only --diff-filter=D <prev tag> <tag>`, oldest
+first), plus one named for the version being packed covering the last tag → working tree.
+So a consumer extracting onto a tree several releases old still learns about every path
+that has gone since, and re-extracting an old pack can't resurrect one.
+
+Releases that deleted nothing get no file; no tags at all → the folder ships empty. A file
+added *and* deleted between two releases never appears — neither end of that diff has it,
+which is what we want, not a gap. Tag-per-file, snapshot diffs: not a walk of every commit.
 
 ## whitening.json
 
