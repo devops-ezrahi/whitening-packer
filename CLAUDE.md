@@ -7,9 +7,10 @@ reference tree):
 ```
 images/                        Docker base images referenced by any Dockerfile
 node_modules/                  installed deps
+to_delete/
+  <version>                    paths deleted since the last release tag, one per line
 repository/
   config.json
-  tags                         the project's git tags, one per line, oldest first
   <repository>/                git-tracked source
 ```
 
@@ -29,7 +30,7 @@ name on the closed-network git; it names the source folder inside `repository/`.
 
 Requires the target path to contain `.git` (hard requirement, not optional).
 
-## config.json + tags
+## config.json
 
 `repository/config.json` is what the consumer reads:
 
@@ -51,8 +52,16 @@ basename minus `.git`), not the local directory name — so a folder renamed/clo
 different name still keys on the actual repo. Falls back to the directory name if there's
 no `origin` remote (local-only repos).
 
-`repository/tags` is `git tag --sort=v:refname` with `pack/*` filtered out (those are the
-packer's own, below — not the project's).
+## to_delete
+
+A pack is extracted **on top of** the previous one, so a file dropped from the repo would
+otherwise live on forever in the unpacked tree. `to_delete/<version>` lists the paths
+`git diff --diff-filter=D <last release tag>` reports — repo-relative, exactly as they sit
+under `repository/<repository>/` — and the consumer deletes them.
+
+One file per pack, named for the version, rather than a single list file: extracting packs
+in order then *accumulates* the folder instead of each pack overwriting the last one's
+list. No baseline tag (first pack) → the folder ships empty.
 
 ## whitening.json
 

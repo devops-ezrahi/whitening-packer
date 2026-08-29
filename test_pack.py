@@ -58,7 +58,7 @@ def test_detect_project_name_falls_back_to_dir_when_no_remote():
 
 
 def test_pack_layout_and_config_from_ci():
-    """department/team/repository come from the CI (env vars here), tags from git."""
+    """department/team/repository come from the CI (env vars here)."""
     with tempfile.TemporaryDirectory() as tmp:
         tmp_path = Path(tmp)
         _init_repo(tmp_path)
@@ -85,16 +85,14 @@ def test_pack_layout_and_config_from_ci():
         with tarfile.open(produced) as tf:
             names = tf.getnames()
             config = json.loads(tf.extractfile("repository/config.json").read())
-            tags = tf.extractfile("repository/tags").read().decode()
-        assert "images" in names and "node_modules" in names, names
+        assert "images" in names and "node_modules" in names and "to_delete" in names, names
+        assert "repository/tags" not in names, names
         assert "repository/ultra-supporting-services/package.json" in names, names
         assert config == {
             "version": "1.0.1",
             "repos": {tmp_path.name: {"department": "ultra", "team": "optimus",
                                       "repository": "ultra-supporting-services"}},
         }, config
-        # pack/* is ours, not the project's.
-        assert tags == "1.0.0\n1.0.1\n", tags
 
 
 def test_missing_ci_values_fail():
@@ -179,6 +177,23 @@ def test_last_release_tag_skips_the_version_being_packed():
 
         assert pack.last_release_tag(tmp_path, "1.0.1") == "v1.0.0"
         assert pack.last_release_tag(tmp_path, "1.0.2") == "v1.0.1"
+
+
+def test_deleted_paths_since_base_tag():
+    with tempfile.TemporaryDirectory() as tmp:
+        tmp_path = Path(tmp)
+        _init_repo(tmp_path)
+        (tmp_path / "keep.txt").write_text("keep")
+        (tmp_path / "gone.txt").write_text("gone")
+        (tmp_path / "sub").mkdir()
+        (tmp_path / "sub" / "also-gone.txt").write_text("gone")
+        _git(["add", "."], tmp_path)
+        _git(["commit", "-m", "init"], tmp_path)
+        _git(["tag", "v1.0.0"], tmp_path)
+        _git(["rm", "-q", "gone.txt", "sub/also-gone.txt"], tmp_path)
+        _git(["commit", "-m", "drop"], tmp_path)
+
+        assert pack.deleted_paths(tmp_path, "v1.0.0") == ["gone.txt", "sub/also-gone.txt"]
 
 
 def test_collect_source_files():

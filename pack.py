@@ -121,13 +121,18 @@ def detect_project_name(project_path: Path) -> str:
     return project_path.name
 
 
-def git_tags(project_path: Path) -> list[str]:
-    """The project's own tags, oldest first. pack/* (ours) never belongs here."""
+def deleted_paths(project_path: Path, base_tag: str) -> list[str]:
+    """Source files deleted since base_tag — repo-relative, as they sit under repository/.
+
+    A pack is extracted on top of the previous one, so a file dropped from the
+    repo would otherwise live forever in the unpacked tree; this is the list the
+    consumer deletes.
+    """
     result = subprocess.run(
-        ["git", "-C", str(project_path), "tag", "--sort=v:refname"],
+        ["git", "-C", str(project_path), "diff", "--name-only", "--diff-filter=D", base_tag],
         capture_output=True, text=True,
     )
-    return [t for t in result.stdout.split() if not t.startswith("pack/")]
+    return sorted(p for p in result.stdout.splitlines() if p)
 
 
 def build_pack_config(project: str, version: str,
@@ -228,8 +233,16 @@ def main() -> None:
         config = build_pack_config(project_name, version, department, team, repository)
         # newline="\n": these are read on Linux, not on whatever packed them.
         (repo_dir / "config.json").write_text(json.dumps(config, indent=2), newline="\n")
-        (repo_dir / "tags").write_text("".join(f"{t}\n" for t in git_tags(project_path)),
-                                       newline="\n")
+
+        base_tag = last_release_tag(project_path, version)
+
+        # One file per pack, named for the version: extracting packs in order
+        # accumulates the folder instead of overwriting a single list.
+        (staging / "to_delete").mkdir()
+        deleted = deleted_paths(project_path, base_tag) if base_tag else []
+        if deleted:
+            (staging / "to_delete" / version).write_text(
+                "".join(f"{p}\n" for p in deleted), newline="\n")
 
         if not args.no_deps:
             # Dest is the tar root: npm lands in node_modules/ as the layout wants.
@@ -237,13 +250,11 @@ def main() -> None:
             deps_dir = staging
 
             include_paths = None
-            if not args.all_deps:
-                base_tag = last_release_tag(project_path, version)
-                if base_tag:
-                    include_paths = changed_dep_paths(project_path, base_tag)
-                    if include_paths is not None:
-                        print(f"delta: {len(include_paths)} changed dep(s) since {base_tag}",
-                              file=sys.stderr)
+            if not args.all_deps and base_tag:
+                include_paths = changed_dep_paths(project_path, base_tag)
+                if include_paths is not None:
+                    print(f"delta: {len(include_paths)} changed dep(s) since {base_tag}",
+                          file=sys.stderr)
             ecosystems.copy_dependencies(project_path, deps_dir, include_paths)
 
         if not no_images:
