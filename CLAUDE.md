@@ -1,15 +1,16 @@
 # whitening packer
 
-Python CLI that packs a git project into one gzipped tar,
-`<team>-<repository>-<version>.tgz`, with this exact layout (see `tar/` for the
+Python CLI that packs a git project into one zip,
+`<repository>-<version>.zip`, with this exact layout (see `tar/` for the
 reference tree):
 
 ```
 images/                        Docker base images referenced by any Dockerfile
 node_modules/                  installed deps
+to_delete/
+  <release>                    paths that release deleted, one per line (all releases)
 repository/
   config.json
-  tags                         the project's git tags, one per line, oldest first
   <repository>/                git-tracked source
 ```
 
@@ -29,7 +30,7 @@ name on the closed-network git; it names the source folder inside `repository/`.
 
 Requires the target path to contain `.git` (hard requirement, not optional).
 
-## config.json + tags
+## config.json
 
 `repository/config.json` is what the consumer reads:
 
@@ -51,8 +52,21 @@ basename minus `.git`), not the local directory name — so a folder renamed/clo
 different name still keys on the actual repo. Falls back to the directory name if there's
 no `origin` remote (local-only repos).
 
-`repository/tags` is `git tag --sort=v:refname` with `pack/*` filtered out (those are the
-packer's own, below — not the project's).
+## to_delete
+
+A pack is extracted **on top of** the previous one, so a file dropped from the repo would
+otherwise live on forever in the unpacked tree. `to_delete/` is the delete list: paths
+repo-relative, exactly as they sit under `repository/<repository>/`.
+
+**Every pack carries the whole history, not just its own deletions** — one file per release
+tag reachable from HEAD (`git diff --name-only --diff-filter=D <prev tag> <tag>`, oldest
+first), plus one named for the version being packed covering the last tag → working tree.
+So a consumer extracting onto a tree several releases old still learns about every path
+that has gone since, and re-extracting an old pack can't resurrect one.
+
+Releases that deleted nothing get no file; no tags at all → the folder ships empty. A file
+added *and* deleted between two releases never appears — neither end of that diff has it,
+which is what we want, not a gap. Tag-per-file, snapshot diffs: not a walk of every commit.
 
 ## whitening.json
 
@@ -73,7 +87,7 @@ release tag is now the baseline — one tag, one release, one pack per version.
 If **not** `--all-deps`, `last_release_tag` finds the last tag reachable from HEAD
 (`git describe --tags --abbrev=0`, excluding `pack/*` and the version being packed)
 and packs **only the dependencies whose lockfile entry changed since then** — a
-*delta* bundle. Delta tarballs are meant to be extracted **on top of** the previous
+*delta* bundle. Delta packs are meant to be extracted **on top of** the previous
 bundle.
 
 The version excludes matter: CI runs semantic-release first, so `v<version>` is
@@ -91,7 +105,7 @@ release being packed — every delta would come out empty.
 
 ## Files
 
-- `pack.py` — CLI entry point, orchestration, version detection, tgz assembly.
+- `pack.py` — CLI entry point, orchestration, version detection, zip assembly.
 - `tar/` — reference tree for the output layout. Match it, don't re-derive it.
 - `ecosystems.py` — dependency-ecosystem table (npm, maven) + copy logic. Add a new
   ecosystem by appending one entry to `DEPENDENCY_ECOSYSTEMS`; no plugin system, it's a
@@ -140,5 +154,5 @@ release being packed — every delta would come out empty.
 - Dockerfile ARG resolution only covers top-of-file default values, not `--build-arg`
   overrides or per-stage redeclaration.
 - No filename sanitization on weird `git describe` output.
-- No new pip dependencies — stdlib only (`tarfile`, `shutil`, `subprocess`, `pathlib`,
+- No new pip dependencies — stdlib only (`zipfile`, `shutil`, `subprocess`, `pathlib`,
   `json`, `re`, `tempfile`, `xml.etree.ElementTree`).

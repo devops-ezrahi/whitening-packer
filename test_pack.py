@@ -4,8 +4,8 @@ import json
 import os
 import subprocess
 import sys
-import tarfile
 import tempfile
+import zipfile
 from pathlib import Path
 
 import dockerimages
@@ -58,7 +58,7 @@ def test_detect_project_name_falls_back_to_dir_when_no_remote():
 
 
 def test_pack_layout_and_config_from_ci():
-    """department/team/repository come from the CI (env vars here), tags from git."""
+    """department/team/repository come from the CI (env vars here)."""
     with tempfile.TemporaryDirectory() as tmp:
         tmp_path = Path(tmp)
         _init_repo(tmp_path)
@@ -79,22 +79,20 @@ def test_pack_layout_and_config_from_ci():
             capture_output=True, text=True, env=env,
         )
         assert result.returncode == 0, result.stderr
-        produced = next(out_dir.glob("*.tgz"))
-        assert produced.name == "optimus-ultra-supporting-services-1.0.1.tgz", produced.name
+        produced = next(out_dir.glob("*.zip"))
+        assert produced.name == "ultra-supporting-services-1.0.1.zip", produced.name
 
-        with tarfile.open(produced) as tf:
-            names = tf.getnames()
-            config = json.loads(tf.extractfile("repository/config.json").read())
-            tags = tf.extractfile("repository/tags").read().decode()
-        assert "images" in names and "node_modules" in names, names
+        with zipfile.ZipFile(produced) as zf:
+            names = [n.rstrip("/") for n in zf.namelist()]
+            config = json.loads(zf.read("repository/config.json"))
+        assert "images" in names and "node_modules" in names and "to_delete" in names, names
+        assert "repository/tags" not in names, names
         assert "repository/ultra-supporting-services/package.json" in names, names
         assert config == {
             "version": "1.0.1",
             "repos": {tmp_path.name: {"department": "ultra", "team": "optimus",
                                       "repository": "ultra-supporting-services"}},
         }, config
-        # pack/* is ours, not the project's.
-        assert tags == "1.0.0\n1.0.1\n", tags
 
 
 def test_missing_ci_values_fail():
@@ -181,6 +179,42 @@ def test_last_release_tag_skips_the_version_being_packed():
         assert pack.last_release_tag(tmp_path, "1.0.2") == "v1.0.1"
 
 
+def test_delete_lists_cover_every_release():
+    """One file per release, all of history — not just this pack's deletions."""
+    with tempfile.TemporaryDirectory() as tmp:
+        tmp_path = Path(tmp)
+        _init_repo(tmp_path)
+        for name in ("keep.txt", "gone-in-2.txt", "sub/gone-in-3.txt"):
+            path = tmp_path / name
+            path.parent.mkdir(parents=True, exist_ok=True)
+            path.write_text(name)
+        _git(["add", "."], tmp_path)
+        _git(["commit", "-m", "init"], tmp_path)
+        _git(["tag", "v1.0.0"], tmp_path)
+
+        _git(["rm", "-q", "gone-in-2.txt"], tmp_path)
+        _git(["commit", "-m", "drop one"], tmp_path)
+        _git(["tag", "v1.0.1"], tmp_path)
+
+        # Added and deleted inside one interval: never in either snapshot, so it
+        # is fine for it to be missing from the lists.
+        (tmp_path / "transient.txt").write_text("x")
+        _git(["add", "."], tmp_path)
+        _git(["commit", "-m", "add transient"], tmp_path)
+        _git(["rm", "-q", "transient.txt", "sub/gone-in-3.txt"], tmp_path)
+        _git(["commit", "-m", "drop more"], tmp_path)
+        _git(["tag", "v1.0.2"], tmp_path)   # the version being packed
+
+        dest = tmp_path / "to_delete"
+        pack.write_delete_lists(tmp_path, dest, "1.0.2")
+
+        assert sorted(f.name for f in dest.iterdir()) == ["1.0.2", "v1.0.1"]
+        assert (dest / "v1.0.1").read_text() == "gone-in-2.txt\n"
+        # v1.0.2 is this pack: its list is named for the version, not the tag.
+        assert (dest / "1.0.2").read_text() == "sub/gone-in-3.txt\n"
+        assert not (dest / "v1.0.0").exists()   # nothing was deleted by the first release
+
+
 def test_collect_source_files():
     with tempfile.TemporaryDirectory() as tmp:
         tmp_path = Path(tmp)
@@ -202,7 +236,7 @@ def test_collect_source_files():
         assert not (dest / "ignored.txt").exists()
 
 
-def test_build_tgz_keeps_empty_dirs():
+def test_build_zip_keeps_empty_dirs():
     with tempfile.TemporaryDirectory() as tmp:
         staging = Path(tmp) / "staging"
         (staging / "repository" / "widget").mkdir(parents=True)
@@ -210,11 +244,11 @@ def test_build_tgz_keeps_empty_dirs():
         (staging / "node_modules").mkdir(parents=True)
         (staging / "images").mkdir(parents=True)
 
-        output = Path(tmp) / "out.tgz"
-        pack.build_tgz(staging, output)
+        output = Path(tmp) / "out.zip"
+        pack.build_zip(staging, output)
 
-        with tarfile.open(output) as tf:
-            names = tf.getnames()
+        with zipfile.ZipFile(output) as zf:
+            names = [n.rstrip("/") for n in zf.namelist()]
         assert "repository/widget/a.txt" in names, names
         assert "images" in names and "node_modules" in names, names
 
