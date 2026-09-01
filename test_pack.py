@@ -4,8 +4,8 @@ import json
 import os
 import subprocess
 import sys
-import tarfile
 import tempfile
+import zipfile
 from pathlib import Path
 
 import dockerimages
@@ -79,12 +79,12 @@ def test_pack_layout_and_config_from_ci():
             capture_output=True, text=True, env=env,
         )
         assert result.returncode == 0, result.stderr
-        produced = next(out_dir.glob("*.tgz"))
-        assert produced.name == "optimus-ultra-supporting-services-1.0.1.tgz", produced.name
+        produced = next(out_dir.glob("*.zip"))
+        assert produced.name == "ultra-supporting-services-1.0.1.zip", produced.name
 
-        with tarfile.open(produced) as tf:
-            names = tf.getnames()
-            config = json.loads(tf.extractfile("repository/config.json").read())
+        with zipfile.ZipFile(produced) as zf:
+            names = [n.rstrip("/") for n in zf.namelist()]
+            config = json.loads(zf.read("repository/config.json"))
         assert "images" in names and "node_modules" in names and "to_delete" in names, names
         assert "repository/tags" not in names, names
         assert "repository/ultra-supporting-services/package.json" in names, names
@@ -236,7 +236,7 @@ def test_collect_source_files():
         assert not (dest / "ignored.txt").exists()
 
 
-def test_build_tgz_keeps_empty_dirs():
+def test_build_zip_keeps_empty_dirs():
     with tempfile.TemporaryDirectory() as tmp:
         staging = Path(tmp) / "staging"
         (staging / "repository" / "widget").mkdir(parents=True)
@@ -244,11 +244,11 @@ def test_build_tgz_keeps_empty_dirs():
         (staging / "node_modules").mkdir(parents=True)
         (staging / "images").mkdir(parents=True)
 
-        output = Path(tmp) / "out.tgz"
-        pack.build_tgz(staging, output)
+        output = Path(tmp) / "out.zip"
+        pack.build_zip(staging, output)
 
-        with tarfile.open(output) as tf:
-            names = tf.getnames()
+        with zipfile.ZipFile(output) as zf:
+            names = [n.rstrip("/") for n in zf.namelist()]
         assert "repository/widget/a.txt" in names, names
         assert "images" in names and "node_modules" in names, names
 

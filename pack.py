@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Pack a git project's source, dependencies, and Docker base images into one tar."""
+"""Pack a git project's source, dependencies, and Docker base images into one zip."""
 
 import argparse
 import json
@@ -8,9 +8,9 @@ import re
 import shutil
 import subprocess
 import sys
-import tarfile
 import tempfile
 import xml.etree.ElementTree as ET
+import zipfile
 from pathlib import Path
 
 import dockerimages
@@ -164,7 +164,7 @@ def write_delete_lists(project_path: Path, dest: Path, version: str) -> None:
     for base, head in zip(tags, tags[1:] + [""]):
         paths = deleted_paths(project_path, base, head)
         if paths:
-            # A tag can contain "/" and would otherwise nest a folder in the tar.
+            # A tag can contain "/" and would otherwise nest a folder in the zip.
             name = (head or version).replace("/", "-")
             (dest / name).write_text("".join(f"{p}\n" for p in paths), newline="\n")
 
@@ -201,12 +201,12 @@ def collect_source_files(project_path: Path, dest: Path) -> None:
         shutil.copy2(src, dst)
 
 
-def build_tgz(staging_dir: Path, output_path: Path) -> None:
+def build_zip(staging_dir: Path, output_path: Path) -> None:
     output_path.parent.mkdir(parents=True, exist_ok=True)
-    with tarfile.open(output_path, "w:gz") as tf:
-        # tf.add recurses, so empty dirs (images/, node_modules/) survive too.
-        for entry in sorted(staging_dir.iterdir()):
-            tf.add(entry, arcname=entry.name)
+    with zipfile.ZipFile(output_path, "w", zipfile.ZIP_DEFLATED) as zf:
+        # Directory entries included, so empty dirs (images/, node_modules/) survive.
+        for path in sorted(staging_dir.rglob("*")):
+            zf.write(path, path.relative_to(staging_dir))
 
 
 def main() -> None:
@@ -216,7 +216,7 @@ def main() -> None:
     parser.add_argument("--all-deps", action="store_true",
                         help="pack all dependencies (skip the delta-since-last-pack-tag optimization)")
     parser.add_argument("--no-images", action="store_true", help="skip the Docker base images folder")
-    parser.add_argument("-o", "--output", help="output tgz path or directory (default: current directory)")
+    parser.add_argument("-o", "--output", help="output zip path or directory (default: current directory)")
     # The CI running the pack owns these three — flag, else env var.
     for name in ("department", "team", "repository"):
         parser.add_argument(f"--{name}", default=os.environ.get(f"WHITENING_{name.upper()}", ""),
@@ -246,14 +246,14 @@ def main() -> None:
     # "images": false in whitening.json is the project saying "never pack base
     # images"; --no-images still wins when it's absent or true.
     no_images = args.no_images or settings.get("images") is False
-    tgz_name = f"{team}-{repository}-{version}.tgz"
+    zip_name = f"{repository}-{version}.zip"
 
     if args.output:
         output_path = Path(args.output).resolve()
         if output_path.is_dir():
-            output_path = output_path / tgz_name
+            output_path = output_path / zip_name
     else:
-        output_path = Path.cwd() / tgz_name
+        output_path = Path.cwd() / zip_name
 
     with tempfile.TemporaryDirectory() as tmp:
         staging = Path(tmp)
@@ -272,7 +272,7 @@ def main() -> None:
         write_delete_lists(project_path, staging / "to_delete", version)
 
         if not args.no_deps:
-            # Dest is the tar root: npm lands in node_modules/ as the layout wants.
+            # Dest is the zip root: npm lands in node_modules/ as the layout wants.
             # ponytail: maven lands in dependency/ — no slot for it in this layout yet.
             deps_dir = staging
 
@@ -287,7 +287,7 @@ def main() -> None:
         if not no_images:
             dockerimages.package_images(project_path, staging / "images")
 
-        build_tgz(staging, output_path)
+        build_zip(staging, output_path)
 
     print(output_path)
 

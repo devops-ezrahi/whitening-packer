@@ -1,7 +1,7 @@
 # whitening packer
 
-Python CLI that packs a git project into one gzipped tar,
-`<team>-<repository>-<version>.tgz`, with this exact layout (see `tar/` for the
+Python CLI that packs a git project into one zip,
+`<repository>-<version>.zip`, with this exact layout (see `tar/` for the
 reference tree):
 
 ```
@@ -87,7 +87,7 @@ release tag is now the baseline — one tag, one release, one pack per version.
 If **not** `--all-deps`, `last_release_tag` finds the last tag reachable from HEAD
 (`git describe --tags --abbrev=0`, excluding `pack/*` and the version being packed)
 and packs **only the dependencies whose lockfile entry changed since then** — a
-*delta* bundle. Delta tarballs are meant to be extracted **on top of** the previous
+*delta* bundle. Delta packs are meant to be extracted **on top of** the previous
 bundle.
 
 The version excludes matter: CI runs semantic-release first, so `v<version>` is
@@ -105,7 +105,7 @@ release being packed — every delta would come out empty.
 
 ## Files
 
-- `pack.py` — CLI entry point, orchestration, version detection, tgz assembly.
+- `pack.py` — CLI entry point, orchestration, version detection, zip assembly.
 - `tar/` — reference tree for the output layout. Match it, don't re-derive it.
 - `ecosystems.py` — dependency-ecosystem table (npm, maven) + copy logic. Add a new
   ecosystem by appending one entry to `DEPENDENCY_ECOSYSTEMS`; no plugin system, it's a
@@ -154,5 +154,5 @@ release being packed — every delta would come out empty.
 - Dockerfile ARG resolution only covers top-of-file default values, not `--build-arg`
   overrides or per-stage redeclaration.
 - No filename sanitization on weird `git describe` output.
-- No new pip dependencies — stdlib only (`tarfile`, `shutil`, `subprocess`, `pathlib`,
+- No new pip dependencies — stdlib only (`zipfile`, `shutil`, `subprocess`, `pathlib`,
   `json`, `re`, `tempfile`, `xml.etree.ElementTree`).
