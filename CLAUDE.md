@@ -116,7 +116,7 @@ release being packed — every delta would come out empty.
 
 ## Version detection order
 
-`package.json` version → `pom.xml` top-level `<version>` →
+`package.json` version → `pom.xml` top-level `<version>` → `Chart.yaml` top-level `version:` →
 `git describe --tags --always --exclude 'pack/*'` → `git rev-parse --short HEAD` →
 `"unknown"`. (`pack/*` is excluded so the packer's own tags don't become the version.)
 

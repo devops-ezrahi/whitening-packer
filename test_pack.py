@@ -150,6 +150,14 @@ def test_detect_version_pom_xml():
         assert pack.detect_version(tmp_path) == "1.0.0-SNAPSHOT"
 
 
+def test_detect_version_chart_yaml():
+    with tempfile.TemporaryDirectory() as tmp:
+        tmp_path = Path(tmp)
+        (tmp_path / "Chart.yaml").write_text(
+            'apiVersion: v2\nname: c\nversion: "0.2.0-dev.1"\nappVersion: "9.9.9"\n')
+        assert pack.detect_version(tmp_path) == "0.2.0-dev.1"
+
+
 def test_detect_version_git_fallback():
     with tempfile.TemporaryDirectory() as tmp:
         tmp_path = Path(tmp)

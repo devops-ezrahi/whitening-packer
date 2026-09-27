@@ -43,6 +43,14 @@ def detect_version(project_path: Path) -> str:
         except (ET.ParseError, OSError):
             pass
 
+    # Helm charts: the top-level `version:` line. A regex, not a YAML parser —
+    # stdlib only, and Chart.yaml's version is always a plain top-level scalar.
+    chart_yaml = project_path / "Chart.yaml"
+    if chart_yaml.exists():
+        match = re.search(r"^version:\s*['\"]?([^'\"\s#]+)", chart_yaml.read_text(), re.M)
+        if match:
+            return match.group(1)
+
     # --exclude pack/*: our own pack tags must not become the detected version.
     for cmd in (
         ["git", "describe", "--tags", "--always", "--exclude", "pack/*"],
